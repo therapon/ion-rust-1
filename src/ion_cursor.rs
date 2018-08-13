@@ -11,6 +11,8 @@ use ion_type::IonType;
 use ion_type_code::IonTypeCode;
 use errors::{IonError, io_error, decoding_error};
 use uint::UInt;
+use std::ops::Deref;
+use std::ops::DerefMut;
 
 const LENGTH_CODE_NULL: u8 = 15;
 const LENGTH_CODE_VAR_UINT: u8 = 14;
@@ -168,42 +170,46 @@ impl Default for CursorValue {
   }
 }
 
+/* CursorState is broken out from the BinaryIonCursor struct to allow it to be cloned
+ * or replaced as part of a seek operation.
+ */
+
 pub struct CursorState {
-
-}
-
-// A low-level reader that offers no validation or symbol management.
-// It can only move and return the current value.
-pub struct BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
-  data_source: &'cursor mut R,
   bytes_read: usize, // How many bytes we've read from `data_source`
-  buffer: Vec<u8>, // Used for individual read() call
   depth: usize, // How deeply nested the cursor is at the moment
   index_at_depth: usize, // The number of values (starting with 0) read at the current depth
   is_in_struct: bool, // Whether this level of descent is within a struct
   value: CursorValue // Information about the value on which the cursor is currently sitting.
 }
 
+// A low-level reader that offers no validation or symbol management.
+// It can only move and return the current value.
+pub struct BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
+  data_source: &'cursor mut R,
+  buffer: Vec<u8>, // Used for individual read() call
+  cursor: CursorState,
+}
+
 impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
 
   pub fn is_null(&self) -> bool {
-    self.value.is_null
+    self.cursor.value.is_null
   }
 
   pub fn integer_value(&mut self) -> Result<Option<i64>, IonError> {
     use self::IonTypeCode::*;
-    if self.value.ion_type != IonType::Integer ||  self.value.is_null {
+    if self.cursor.value.ion_type != IonType::Integer ||  self.cursor.value.is_null {
       return Ok(None);
     }
 
-    if self.bytes_read >= self.value.last_byte && self.value.length_in_bytes > 0 {
+    if self.cursor.bytes_read >= self.cursor.value.last_byte && self.cursor.value.length_in_bytes > 0 {
       panic!("You cannot read the same integer value more than once.");
     }
 
-    debug!("Length in bytes: {}", self.value.length_in_bytes);
+    debug!("Length in bytes: {}", self.cursor.value.length_in_bytes);
     let magnitude = self.read_uint()?.value();
     debug!("Magnitude: {}", magnitude);
-    let value = match self.value.header.ion_type_code {
+    let value = match self.cursor.value.header.ion_type_code {
       PositiveInteger => magnitude as i64,
       NegativeInteger => magnitude as i64 * -1,
       _ => unreachable!("The Ion Type Code must be one of the above to reach this point.")
@@ -213,15 +219,15 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
   }
 
   pub fn float_value(&mut self) -> Result<Option<f64>, IonError> {
-    if self.value.ion_type != IonType::Float ||  self.value.is_null {
+    if self.cursor.value.ion_type != IonType::Float ||  self.cursor.value.is_null {
       return Ok(None);
     }
 
-    if self.bytes_read >= self.value.last_byte && self.value.length_in_bytes > 0 {
+    if self.cursor.bytes_read >= self.cursor.value.last_byte && self.cursor.value.length_in_bytes > 0 {
       panic!("You cannot read the same float value more than once.");
     }
 
-    let number_of_bytes = self.value.length_in_bytes;
+    let number_of_bytes = self.cursor.value.length_in_bytes;
     let _ = self.read_exact(number_of_bytes)?;
 
     let value = match number_of_bytes {
@@ -240,13 +246,13 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
   }
 
   pub fn boolean_value(&mut self) -> Result<Option<bool>, IonError> {
-    if self.value.ion_type != IonType::Boolean ||  self.value.is_null {
+    if self.cursor.value.ion_type != IonType::Boolean ||  self.cursor.value.is_null {
       return Ok(None);
     }
 
     // No reading from the stream occurs -- the header contained all of the information we needed.
 
-    let representation = self.value.header.length_code;
+    let representation = self.cursor.value.header.length_code;
 
     match representation {
       0 => Ok(Some(false)),
@@ -259,15 +265,15 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
 
   pub fn string_value(&mut self) -> Result<Option<&str>, IonError> {
     use std::str;
-    if self.value.ion_type != IonType::String || self.value.is_null {
+    if self.cursor.value.ion_type != IonType::String || self.cursor.value.is_null {
       return Ok(None);
     }
 
-    if self.bytes_read >= self.value.last_byte && self.value.length_in_bytes > 0{
+    if self.cursor.bytes_read >= self.cursor.value.last_byte && self.cursor.value.length_in_bytes > 0{
       panic!("You cannot read the same string value more than once.");
     }
 
-    let length_in_bytes = self.value.length_in_bytes;
+    let length_in_bytes = self.cursor.value.length_in_bytes;
     let _ = self.read_exact(length_in_bytes)?;
     match str::from_utf8(&self.buffer) {
       Ok(string) => Ok(Some(string)),
@@ -281,11 +287,11 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
   }
 
   pub fn symbol_value(&mut self) -> Result<Option<usize>, IonError> {
-    if self.value.ion_type != IonType::Symbol ||  self.value.is_null {
+    if self.cursor.value.ion_type != IonType::Symbol ||  self.cursor.value.is_null {
       return Ok(None);
     }
 
-    if self.bytes_read >= self.value.last_byte && self.value.length_in_bytes > 0 {
+    if self.cursor.bytes_read >= self.cursor.value.last_byte && self.cursor.value.length_in_bytes > 0 {
       panic!("You cannot read the same symbol value more than once.");
     }
 
@@ -294,39 +300,39 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
   }
 
   pub fn blob_value(&mut self) -> Result<Option<&[u8]>, IonError> {
-    if self.value.ion_type != IonType::Blob ||  self.value.is_null {
+    if self.cursor.value.ion_type != IonType::Blob ||  self.cursor.value.is_null {
       return Ok(None);
     }
 
-    if self.bytes_read >= self.value.last_byte && self.value.length_in_bytes > 0 {
+    if self.cursor.bytes_read >= self.cursor.value.last_byte && self.cursor.value.length_in_bytes > 0 {
       panic!("You cannot read the same blob value more than once.");
     }
 
-    let number_of_bytes = self.value.length_in_bytes;
+    let number_of_bytes = self.cursor.value.length_in_bytes;
     let _ = self.read_exact(number_of_bytes)?;
     Ok(Some(&self.buffer))
   }
 
   pub fn clob_value(&mut self) -> Result<Option<&[u8]>, IonError> {
-    if self.value.ion_type != IonType::Clob ||  self.value.is_null {
+    if self.cursor.value.ion_type != IonType::Clob ||  self.cursor.value.is_null {
       return Ok(None);
     }
 
-    if self.bytes_read >= self.value.last_byte && self.value.length_in_bytes > 0 {
+    if self.cursor.bytes_read >= self.cursor.value.last_byte && self.cursor.value.length_in_bytes > 0 {
       panic!("You cannot read the same clob value more than once.");
     }
 
-    let number_of_bytes = self.value.length_in_bytes;
+    let number_of_bytes = self.cursor.value.length_in_bytes;
     let _ = self.read_exact(number_of_bytes)?;
     Ok(Some(&self.buffer))
   }
 
   pub fn annotations(&self) -> &[usize] {
-    &self.value.annotations
+    &self.cursor.value.annotations
   }
 
   pub fn field_id(&self) -> Option<usize> {
-    self.value.field_id
+    self.cursor.value.field_id
   }
 
   pub fn new(data_source: &mut R) -> Result<BinaryIonCursor<R>, IonError> {
@@ -344,29 +350,31 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
 
     Ok(BinaryIonCursor {
       data_source,
-      bytes_read: IVM_LENGTH,
       buffer: vec![],
-      depth: 0,
-      index_at_depth: 0,
-      is_in_struct: false,
-      value: Default::default()
+      cursor: CursorState {
+        bytes_read: IVM_LENGTH,
+        depth: 0,
+        index_at_depth: 0,
+        is_in_struct: false,
+        value: Default::default()
+      },
     })
   }
 
   pub fn next(&mut self) -> Result<Option<IonType>, IonError> {
     let _ = self.skip_current_value()?;
 
-    if let Some(ref parent) = self.value.parent {
+    if let Some(ref parent) = self.cursor.value.parent {
       // If the cursor is nested inside a parent object, don't attempt to read beyond the end of
       // the parent. Users can call '.step_out()' to progress beyond the container.
-      if self.bytes_read >= parent.last_byte {
+      if self.cursor.bytes_read >= parent.last_byte {
         debug!("We've run out of values in this parent.");
         return Ok(None);
       }
     }
 
     // If we're in a struct, read the field id that must precede each value.
-    self.value.field_id = match self.is_in_struct {
+    self.cursor.value.field_id = match self.cursor.is_in_struct {
       true => {
         Some(self.read_field_id()?)
       },
@@ -378,10 +386,10 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
       Some(header) => header,
       None => return Ok(None)
     };
-    self.value.header = header;
+    self.cursor.value.header = header;
 
     // Clear the annotations vec before (maybe) reading new ones
-    self.value.annotations.truncate(0);
+    self.cursor.value.annotations.truncate(0);
     if header.ion_type_code == IonTypeCode::Annotation {
       // We've found an annotated value. Read all of the annotation symbols leading up to the value.
       let _ = self.read_annotations()?;
@@ -390,33 +398,34 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
         Some(header) => header,
         None => return Ok(None)
       };
-      self.value.header = header;
+      self.cursor.value.header = header;
     }
 
     let _ = self.process_header_by_type_code(&header)?;
 
-    self.index_at_depth += 1;
-    self.value.index_at_depth = self.index_at_depth;
+    self.cursor.index_at_depth += 1;
+    self.cursor.value.index_at_depth = self.cursor.index_at_depth;
 
-    Ok(Some(self.value.ion_type))
+    Ok(Some(self.cursor.value.ion_type))
   }
 
   fn read_var_uint(&mut self) -> Result<VarUInt, IonError> {
     let var_uint = VarUInt::read_var_uint(&mut self.data_source)?;
-    self.bytes_read += var_uint.size_in_bytes();
+    self.cursor.bytes_read += var_uint.size_in_bytes();
     Ok(var_uint)
   }
 
   fn read_uint(&mut self) -> Result<UInt, IonError> {
-    let uint = UInt::read_uint(&mut self.data_source, self.value.length_in_bytes)?;
-    self.bytes_read += uint.size_in_bytes();
+    let number_of_bytes = self.cursor.value.length_in_bytes;
+    let uint = UInt::read_uint(&mut self.data_source, number_of_bytes)?;
+    self.cursor.bytes_read += uint.size_in_bytes();
     Ok(uint)
   }
 
   fn read_exact(&mut self, number_of_bytes: usize) -> Result<(), IonError> {
     self.buffer.resize(number_of_bytes, 0); // Will grow the buffer if needed.
     let _ = self.data_source.read_exact(&mut self.buffer)?;
-    self.bytes_read += number_of_bytes;
+    self.cursor.bytes_read += number_of_bytes;
     Ok(())
   }
 
@@ -424,9 +433,9 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
     let length_code = header.length_code;
     let ion_type_code = header.ion_type_code;
 
-    self.value.ion_type = IonType::from(header.ion_type_code)?;
-    self.value.header = *header;
-    self.value.is_null = header.length_code == LENGTH_CODE_NULL;
+    self.cursor.value.ion_type = IonType::from(header.ion_type_code)?;
+    self.cursor.value.header = *header;
+    self.cursor.value.is_null = header.length_code == LENGTH_CODE_NULL;
 
     use self::IonTypeCode::*;
     let length = match ion_type_code {
@@ -450,18 +459,18 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
     };
 
     debug!("Inferred length in bytes: {}", length);
-    self.value.length_in_bytes = length;
-    self.value.last_byte = self.bytes_read + length;
+    self.cursor.value.length_in_bytes = length;
+    self.cursor.value.last_byte = self.cursor.bytes_read + length;
     debug!("Cursor has read {} bytes. Last byte for this {:?}: {}",
-             self.bytes_read,
-             self.value.ion_type,
-             self.value.last_byte
+             self.cursor.bytes_read,
+             self.cursor.value.ion_type,
+             self.cursor.value.last_byte
     );
     Ok(())
   }
 
   fn read_standard_length(&mut self) -> Result<usize, IonError> {
-    let length = match self.value.header.length_code {
+    let length = match self.cursor.value.header.length_code {
       LENGTH_CODE_NULL => 0,
       LENGTH_CODE_VAR_UINT => self.read_var_uint()?.value(),
       magnitude => magnitude as usize
@@ -471,7 +480,7 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
   }
 
   fn read_float_length(&mut self) -> Result<usize, IonError> {
-    let length = match self.value.header.length_code {
+    let length = match self.cursor.value.header.length_code {
       0 => 0,
       4 => 4,
       8 => 8,
@@ -479,7 +488,7 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
       _ => return decoding_error(
         format!(
           "Found a Float value with an illegal length: {}",
-          self.value.header.length_code
+          self.cursor.value.header.length_code
         ).as_ref()
       )
     };
@@ -487,7 +496,7 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
   }
 
   fn read_struct_length(&mut self) -> Result<usize, IonError> {
-    let length = match self.value.header.length_code {
+    let length = match self.cursor.value.header.length_code {
       LENGTH_CODE_NULL => 0,
       1 | LENGTH_CODE_VAR_UINT => self.read_var_uint()?.value(),
       magnitude => magnitude as usize
@@ -510,12 +519,12 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
       ion_type_code,
       length_code
     };
-    debug!("Next header at byte {}: {:?}", self.bytes_read, &header);
+    debug!("Next header at byte {}: {:?}", self.cursor.bytes_read, &header);
     Ok(Some(header))
   }
 
   fn next_byte(&mut self) -> Result<Option<u8>, IonError> {
-    self.bytes_read += 1;
+    self.cursor.bytes_read += 1;
     match self.data_source.bytes().next() {
       None => Ok(None),
       Some(Ok(byte)) => Ok(Some(byte)),
@@ -525,24 +534,24 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
 
   fn skip_bytes(&mut self, number_of_bytes: usize) -> Result<(), IonError> {
     use std::io;
-    debug!("Before seek, bytes_read: {}, number to skip: {}", self.bytes_read, number_of_bytes);
+    debug!("Before seek, bytes_read: {}, number to skip: {}", self.cursor.bytes_read, number_of_bytes);
 
     let _bytes_copied = io::copy(
       &mut self.data_source.by_ref().take(number_of_bytes as u64),
       &mut io::sink()
     )?;
 
-    self.bytes_read += number_of_bytes;
-    debug!("After seek, bytes_read: {}", self.bytes_read);
+    self.cursor.bytes_read += number_of_bytes;
+    debug!("After seek, bytes_read: {}", self.cursor.bytes_read);
     Ok(())
   }
 
   fn skip_current_value(&mut self) -> Result<(), IonError> {
-    if self.index_at_depth == 0 {
+    if self.cursor.index_at_depth == 0 {
       debug!("Haven't read the first value yet. Not skipping.");
       Ok(())
     } else {
-      let bytes_to_skip = self.value.last_byte - self.bytes_read;
+      let bytes_to_skip = self.cursor.value.last_byte - self.cursor.bytes_read;
       debug!("Moving to the next value by skipping {} bytes", bytes_to_skip);
       self.skip_bytes(bytes_to_skip)
     }
@@ -567,7 +576,7 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
       let var_uint = self.read_var_uint()?;
       bytes_read += var_uint.size_in_bytes();
       let annotation_symbol_id = var_uint.value();
-      self.value.annotations.push(annotation_symbol_id);
+      self.cursor.value.annotations.push(annotation_symbol_id);
     }
     Ok(())
   }
@@ -575,20 +584,20 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
   pub fn step_in(&mut self) -> Result<(), IonError> {
     use self::IonType::*;
     use std::mem::swap;
-    match self.value.ion_type {
+    match self.cursor.value.ion_type {
       List | SExpression => {
-        self.is_in_struct = false;
+        self.cursor.is_in_struct = false;
       },
       Struct => {
-        self.is_in_struct = true;
+        self.cursor.is_in_struct = true;
       },
-      _ => panic!("You cannot step into a(n) {:?}", self.value.ion_type)
+      _ => panic!("You cannot step into a(n) {:?}", self.cursor.value.ion_type)
     }
-    let parent = self.value.clone();
+    let parent = self.cursor.value.clone();
     debug!("Stepping into parent: {:?}", parent);
-    self.value.parent = Some(Box::new(parent));
-    self.depth += 1;
-    self.index_at_depth = 0;
+    self.cursor.value.parent = Some(Box::new(parent));
+    self.cursor.depth += 1;
+    self.cursor.index_at_depth = 0;
     Ok(())
   }
 
@@ -597,30 +606,30 @@ impl <'cursor, R> BinaryIonCursor<'cursor, R> where R: Read + 'cursor {
     let bytes_to_skip;
     let mut parent_value;
     { // parent scope
-      let parent = match self.value.parent {
+      let parent = match self.cursor.value.parent {
         Some(ref parent) => parent,
         None => panic!("You cannot step out of the root level.")
       };
-      debug!("Currently at byte: {}", self.bytes_read);
+      debug!("Currently at byte: {}", self.cursor.bytes_read);
       debug!("Stepping out of parent: {:?}", parent);
-      bytes_to_skip = parent.last_byte - self.bytes_read;
+      bytes_to_skip = parent.last_byte - self.cursor.bytes_read;
       debug!("Bytes to skip: {}", bytes_to_skip);
       parent_value = (**parent).clone();
     }
     // Revert the cursor's current value to be the parent we stepped into.
     // After some bookkeeping, we'll skip enough bytes to move to the end of the parent.
-    swap(&mut self.value, &mut parent_value);
-    if let Some(ref parent) = self.value.parent {
-      self.is_in_struct = parent.ion_type == IonType::Struct;
-      debug!("Are we in a Struct? {}", self.is_in_struct);
+    swap(&mut self.cursor.value, &mut parent_value);
+    if let Some(ref parent) = self.cursor.value.parent {
+      self.cursor.is_in_struct = parent.ion_type == IonType::Struct;
+      debug!("Are we in a Struct? {}", self.cursor.is_in_struct);
     } else {
-      self.is_in_struct = false;
+      self.cursor.is_in_struct = false;
     }
-    self.index_at_depth = self.value.index_at_depth;
-    self.depth -= 1;
+    self.cursor.index_at_depth = self.cursor.value.index_at_depth;
+    self.cursor.depth -= 1;
     debug!("Stepping out by skipping {} bytes.", bytes_to_skip);
     self.skip_bytes(bytes_to_skip)?;
-    debug!("After stepping out, bytes_read is: {}", self.bytes_read);
+    debug!("After stepping out, bytes_read is: {}", self.cursor.bytes_read);
     Ok(())
   }
 }

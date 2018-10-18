@@ -1,6 +1,8 @@
 use std::convert::From;
 use std::io;
 
+pub type IonResult<T> = Result<T, IonError>;
+
 #[derive(Debug, Fail)]
 pub enum IonError {
   #[fail(display = "An IO error occurred: {}", description)]
@@ -14,13 +16,13 @@ pub enum IonError {
   }
 }
 
-pub fn decoding_error<T>(description: &str) -> Result<T, IonError> {
+pub fn decoding_error<T>(description: &str) -> IonResult<T> {
   Err(IonError::DecodingError {
     description: description.to_string()
   })
 }
 
-pub fn io_error<T>(description: &str) -> Result<T, IonError> {
+pub fn io_error<T>(description: &str) -> IonResult<T> {
   Err(IonError::IoError {
     description: description.to_string()
   })

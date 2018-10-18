@@ -1,7 +1,9 @@
 use std::mem;
 use std::io::Read;
-use errors::IonError;
 
+use result::IonResult;
+
+// TODO: variable size storage
 type VarUIntStorage = usize;
 
 #[derive(Debug)]
@@ -12,11 +14,11 @@ pub struct VarUInt {
 
 impl VarUInt {
   #[inline(always)]
-  pub fn read_var_uint(data_source: &mut Read) -> Result<VarUInt, IonError> {
+  pub fn read_var_uint(data_source: &mut Read) -> IonResult<VarUInt> {
     let mut number_of_bytes = 0;
     let mut magnitude: VarUIntStorage = 0;
 
-    for (_i, byte_result) in data_source.bytes().enumerate() {
+    for byte_result in data_source.bytes() {
       let byte = byte_result?;
       number_of_bytes += 1;
       let lower_seven = 0b0111_1111 & byte;
@@ -48,7 +50,7 @@ impl VarUInt {
 mod tests {
   use super::VarUInt;
   use std::io::Cursor;
-  use errors::IonError;
+  use result::IonError;
 
   #[test]
   fn test_read_var_uint() {

@@ -1,5 +1,5 @@
 use std::io::Read;
-use errors::IonError;
+use result::IonResult;
 
 type UIntStorage = u64;
 
@@ -10,10 +10,16 @@ pub struct UInt {
 }
 
 impl UInt {
-  pub fn read_uint(data_source: &mut Read, length: usize) -> Result<UInt, IonError> {
+  #[inline]
+  pub fn read_uint(data_source: &mut Read, length: usize) -> IonResult<UInt> {
     let mut magnitude: UIntStorage = 0;
-    for (_i, byte) in data_source.bytes().take(length).enumerate() {
-      let byte = (byte?) as UIntStorage;
+    let mut buffer = [0u8; 8]; //TODO: Pass in a buffer instead of specifying a length
+    let mut buffer = &mut buffer[0..length];
+    //TODO: Read `length` bytes at once instead of error handling each byte
+//    for (_i, byte) in data_source.bytes().take(length).enumerate() {
+    let _ = data_source.read_exact(buffer)?;
+    for byte in buffer.iter().cloned() {
+      let byte = byte as UIntStorage;
       magnitude = magnitude << 8;
       magnitude = magnitude | byte;
     }

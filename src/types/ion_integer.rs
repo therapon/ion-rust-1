@@ -3,7 +3,7 @@ use std::convert::From;
 //TODO: This value's internal representation should be flexible enough to support BigInteger-style
 // values. For now, we're just starting with i64.
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct IonInteger {
   value: i64
 }
@@ -40,26 +40,26 @@ impl From<isize> for IonInteger {
   }
 }
 
-impl Into<u64> for IonInteger {
-  fn into(self) -> u64 {
-    self.value as u64
+impl From<IonInteger> for u64 {
+  fn from(ion_integer: IonInteger) -> Self {
+    ion_integer.value as u64
   }
 }
 
-impl Into<i64> for IonInteger {
-  fn into(self) -> i64 {
-    self.value as i64
+impl From<IonInteger> for i64 {
+  fn from(ion_integer: IonInteger) -> Self {
+    ion_integer.value
   }
 }
 
-impl Into<isize> for IonInteger {
-  fn into(self) -> isize {
-    self.value as isize
+impl From<IonInteger> for isize {
+  fn from(ion_integer: IonInteger) -> Self {
+    ion_integer.value as isize
   }
 }
 
-impl Into<usize> for IonInteger {
-  fn into(self) -> usize {
-    self.value as usize
+impl From<IonInteger> for usize {
+  fn from(ion_integer: IonInteger) -> Self {
+    ion_integer.value as usize
   }
 }

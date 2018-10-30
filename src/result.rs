@@ -3,7 +3,7 @@ use std::io;
 
 pub type IonResult<T> = Result<T, IonError>;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Fail, Clone)]
 pub enum IonError {
   #[fail(display = "An IO error occurred: {}", description)]
   IoError {
@@ -16,9 +16,9 @@ pub enum IonError {
   }
 }
 
-pub fn decoding_error<T>(description: &str) -> IonResult<T> {
+pub fn decoding_error<T, S: AsRef<str>>(description: S) -> IonResult<T> {
   Err(IonError::DecodingError {
-    description: description.to_string()
+    description: description.as_ref().to_string()
   })
 }
 

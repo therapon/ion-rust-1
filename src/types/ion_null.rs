@@ -1,8 +1,7 @@
 use std::convert::From;
-use std::ops::Deref;
-use ion_type::IonType;
+use types::ion_type::IonType;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub struct IonNull {
   ion_type: IonType
 }
@@ -13,10 +12,11 @@ impl IonNull {
   }
 }
 
-impl From<bool> for IonNull {
+impl From<IonType> for IonNull {
   fn from(ion_type: IonType) -> Self {
     IonNull {
       ion_type
     }
   }
+
 }

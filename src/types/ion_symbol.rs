@@ -1,10 +1,10 @@
 use std::convert::From;
-use types::ion_integer::IonInteger;
-use types::ion_string::IonString;
+use types::IonInteger;
+use types::IonString;
 
 pub type IonSymbolId = IonInteger;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub struct IonSymbol {
   id: IonSymbolId,
   text: Option<IonString> // May or may not have been resolved successfully
@@ -21,11 +21,17 @@ impl IonSymbol {
 }
 
 impl IonSymbol {
-  fn new<I, S>(id: I, text: Option<S>) -> Self where I: Into<IonInteger>,
+  pub fn new<I, S>(id: I, text: Option<S>) -> Self where I: Into<IonInteger>,
                                                      S: Into<IonString> {
     IonSymbol {
       id: Into::into(id),
       text: text.map(Into::into)
     }
+  }
+}
+
+impl From<IonSymbol> for (IonSymbolId, Option<IonString>) {
+  fn from(ion_symbol: IonSymbol) -> Self {
+    (ion_symbol.id, ion_symbol.text)
   }
 }

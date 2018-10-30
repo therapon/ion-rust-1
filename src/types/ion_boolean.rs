@@ -1,21 +1,20 @@
 use std::convert::From;
-use std::ops::Deref;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub struct IonBoolean {
   value: bool
 }
 
 impl IonBoolean {
-  fn is_true(&self) -> bool {
+  pub fn is_true(&self) -> bool {
     self.value
   }
 
-  fn is_false(&self) -> bool {
+  pub fn is_false(&self) -> bool {
     !self.value
   }
 
-  fn boolean_value(&self) -> bool {
+  pub fn boolean_value(&self) -> bool {
     self.value
   }
 }

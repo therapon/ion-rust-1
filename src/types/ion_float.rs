@@ -1,9 +1,6 @@
 use std::convert::From;
-use std::convert::AsRef;
-use std::borrow::Cow;
-use std::ops::Deref;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
 pub struct IonFloat {
   value: f64
 }
@@ -23,5 +20,11 @@ impl From<f64> for IonFloat {
     IonFloat {
       value
     }
+  }
+}
+
+impl From<IonFloat> for f64 {
+  fn from(ion_float: IonFloat) -> Self {
+    ion_float.value
   }
 }

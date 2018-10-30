@@ -2,75 +2,15 @@ extern crate amzn_ion;
 
 use amzn_ion::binary::ion_cursor::BinaryIonCursor;
 use amzn_ion::result::{IonResult, decoding_error};
-use amzn_ion::types::ion_type::IonType;
+use amzn_ion::types::IonType;
 
 use std::fs::File;
-use std::io::BufReader;
 use std::collections::HashMap;
 use std::io::Read;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::collections::HashSet;
-use amzn_ion::types::ion_symbol::IonSymbolId;
-
-const SYSTEM_SYMBOLS: &[&str] = &[
-  "$0", // Symbol Zero
-  "$ion",
-  "$ion_1_0",
-  "$ion_symbol_table",
-  "name",
-  "version",
-  "imports",
-  "symbols",
-  "max_id",
-  "$ion_shared_symbol_table"
-];
-
-#[derive(Debug)]
-struct SymbolTable {
-  symbols: Vec<String>,
-}
-
-impl SymbolTable {
-  pub fn new() -> SymbolTable {
-    SymbolTable {
-      symbols: SYSTEM_SYMBOLS.iter().map(|s| s.to_string()).collect()
-    }
-  }
-
-  pub fn intern(&mut self, text: String) -> usize {
-    self.symbols.push(text);
-    self.symbols.len()
-  }
-
-  pub fn resolve<I>(&self, index: I) -> Option<&str> where I: Into<IonSymbolId> {
-    let index: usize = index.into().into();
-    if index >= self.symbols.len() {
-      return None;
-    }
-    Some(&self.symbols[index])
-  }
-}
-
-struct BinaryIonReader<'cursor, R: Read + 'cursor> {
-  pub symbols: SymbolTable,
-  pub cursor: BinaryIonCursor<'cursor, R>
-}
-
-impl <'cursor, R: Read + 'cursor> BinaryIonReader<'cursor, R> {
-  fn read_text(&mut self) -> IonResult<String> {
-    let ion_type = self.cursor.ion_type();
-    match ion_type {
-      IonType::String => Ok(self.cursor.string_ref_value()?.unwrap().to_string()),
-      IonType::Symbol => {
-        let symbol_id = self.cursor.symbol_id_value()?.unwrap();
-        //println!("Resolving: {:?} in {:?}, {} symbols", symbol_id, self.symbols, self.symbols.symbols.len());
-        Ok(self.symbols.resolve(symbol_id).expect("Unknown symbol!").to_string())
-      },
-      _ => panic!("Tried to get text from a {:?}", ion_type)
-    }
-  }
-}
+use amzn_ion::types::IonSymbolId;
 
 #[derive(Debug)]
 struct LogEvent {
@@ -136,6 +76,8 @@ fn read_log_event<T: Read>(reader: &mut BinaryIonReader<T>) -> IonResult<LogEven
 //      println!("Format is a {:?}", ion_type);
       let format = reader.read_text()?;//cursor.symbol_value()?.unwrap();
 
+      //TODO: parameters, thread context, throwable
+
       let _ = reader.cursor.step_out()?;
 
       return Ok(LogEvent {
@@ -196,17 +138,15 @@ fn read_symbol_list<T: Read>(reader: &mut BinaryIonReader<T>) -> IonResult<()> {
 }
 
 fn unique_log_statements(path: &str) -> IonResult<()> {
-  let file = File::open(path).expect("Unable to open file");
-
-  let mut buf_reader = BufReader::with_capacity(32 * 1_024, file);
-  let cursor = BinaryIonCursor::new(&mut buf_reader)?;
+  let mut file = File::open(path).expect("Unable to open file");
+  let cursor = BinaryIonCursor::new(&mut file)?;
 
   let mut ion_reader = BinaryIonReader {
     symbols: SymbolTable::new(),
     cursor
   };
 
-  let mut log_statements = HashSet::new();
+  let mut log_statements: HashSet<LogEvent> = HashSet::new();
 
   let mut count = 0;
   while let Ok(event) = read_log_event(&mut ion_reader) {

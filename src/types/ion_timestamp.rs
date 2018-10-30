@@ -1,8 +1,7 @@
 use std::convert::From;
-use std::ops::Deref;
 use chrono::prelude::*;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
 pub struct IonTimestamp {
   datetime: DateTime<FixedOffset>
 }

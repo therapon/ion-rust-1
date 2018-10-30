@@ -1,7 +1,7 @@
 use std::convert::From;
 use bigdecimal::BigDecimal;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub struct IonDecimal {
   value: BigDecimal
 }

@@ -11,10 +11,10 @@ pub struct UInt {
 
 impl UInt {
   #[inline]
-  pub fn read_uint(data_source: &mut Read, length: usize) -> IonResult<UInt> {
+  pub fn read_uint<R: Read>(data_source: &mut R, length: usize) -> IonResult<UInt> {
     let mut magnitude: UIntStorage = 0;
     let mut buffer = [0u8; 8]; //TODO: Pass in a buffer instead of specifying a length
-    let mut buffer = &mut buffer[0..length];
+    let buffer = &mut buffer[0..length];
     //TODO: Read `length` bytes at once instead of error handling each byte
 //    for (_i, byte) in data_source.bytes().take(length).enumerate() {
     let _ = data_source.read_exact(buffer)?;

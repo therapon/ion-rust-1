@@ -18,7 +18,7 @@ impl Int {
       });
     }
 
-    let mut magnitude: IntStorage = 0;
+    let mut magnitude: IntStorage;
 
     let first_byte: i64 = data_source.bytes().next().unwrap()? as IntStorage;
     let sign: IntStorage = if first_byte & 0b1000_0000 == 0 {1} else {-1};

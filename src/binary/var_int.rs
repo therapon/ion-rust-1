@@ -1,4 +1,3 @@
-use std::mem;
 use std::io::Read;
 
 use result::IonResult;

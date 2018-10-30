@@ -2,97 +2,68 @@ extern crate amzn_ion;
 
 use amzn_ion::binary::ion_cursor::{IonDataSource, BinaryIonCursor};
 use amzn_ion::result::IonResult;
-use amzn_ion::types::ion_type::IonType;
+use amzn_ion::types::IonType;
 
 use std::fs::File;
-use std::io::BufReader;
-use std::io::Read;
-use std::io;
 
 fn skim_file(path: &str) -> IonResult<()> {
-  let file = File::open(path).expect("Unable to open file");
-  let mut reader = BufReader::with_capacity(32 * 1_024, file);
-  let mut cursor = BinaryIonCursor::new(&mut reader)?;
+  let mut file = File::open(path).expect("Unable to open file");
+  let mut cursor = BinaryIonCursor::new(&mut file)?;
 
-  skim_values(&mut cursor, 0)
+  skim_values(&mut cursor)
 }
 
-fn skim_values<R: IonDataSource>(cursor: &mut BinaryIonCursor<R>, depth: usize) -> IonResult<()> {
-  let mut current_ion_type: Option<IonType> = cursor.next()?;
-  while let Some(ion_type) = current_ion_type {
-    { // Annotations scope
-      let annotations = cursor.annotations();
-      let num_annotations = annotations.count();
-      let field_id = cursor.field_id();
-      match (num_annotations, field_id) {
-        (0, Some(ref field_id)) => {
-          //debug!("{} Found a(n) {:?} with field_id: {:?}", marker, ion_type, field_id);
-        },
-        (0, None) => {
-          //debug!("{} Found a(n) {:?}", marker, ion_type);
-        },
-        (_, Some(ref field_id)) => {
-          //debug!("{} Found a(n) {:?} with field_id: {:?} and annotations: {:?}",
-//                     marker,
-//                     ion_type,
-//                     field_id,
-//                     annotations);
-        },
-        (_, None) => {
-          ////debug!("{} Found a(n) {:?} with annotations: {:?}",
-//                     marker,
-//                     ion_type,
-//                     annotations);
-        },
+fn skim_values<R: IonDataSource>(cursor: &mut BinaryIonCursor<R>) -> IonResult<()> {
+  use IonType::*;
+  let mut count = 0;
+  loop {
+    if let Some(ion_type) = cursor.next()? {
+      count += 1;
+      if cursor.is_null() {
+        continue;
       }
-    }
-
-    if cursor.is_null() {
-      ////debug!("  VALUE: null.{:?}", ion_type);
-    } else {
-      use self::IonType::*;
       match ion_type {
+        Struct | List | SExpression => {
+          let _ = cursor.step_in()?;
+//          let _ = skim_values(cursor, depth + 1)?;
+//          let _ = cursor.step_out()?;
+        },
         String => {
-          let text = cursor.string_ref_value()?.unwrap();
-          ////debug!("  VALUE: {}", text);
+          let _text = cursor.string_ref_map(|_s| ())?.unwrap();
         },
         Symbol => {
-          let symbol_id = cursor.symbol_id_value()?.unwrap();
-          ////debug!("  VALUE: {}", symbol_id);
+          let _symbol_id = cursor.symbol_id_value()?.unwrap();
         },
         Integer => {
-          let int = cursor.integer_value()?.unwrap();
-          ////debug!("  VALUE: {}", int)
-        },
-        Boolean => {
-          let boolean = cursor.boolean_value()?.unwrap();
-          ////debug!("  VALUE: {}", boolean)
+          let _int = cursor.integer_value()?.unwrap();
         },
         Float => {
-          let float = cursor.float_value()?.unwrap();
-          ////debug!("  VALUE: {}", float)
+          let _float = cursor.float_value()?.unwrap();
+        },
+        Decimal => {
+          let _decimal = cursor.decimal_value()?.unwrap();
+        }
+        Timestamp => {
+          let _timestamp = cursor.timestamp_value()?.unwrap();
+        }
+        Boolean => {
+          let _boolean = cursor.boolean_value()?.unwrap();
         },
         Blob => {
-          let blob = cursor.blob_ref_value()?.unwrap();
+          let _blob = cursor.blob_ref_map(|_b| ())?.unwrap();
         },
         Clob => {
-          let clob = cursor.clob_ref_value()?.unwrap();
+          let _clob = cursor.clob_ref_map(|_c| ())?.unwrap();
         }
-        _ => {
-          ////debug!("  VALUE: <{:?} not yet supported>", ion_type);
-        }
+        Null => {}
       }
-    }
-
-    if ion_type == IonType::List || ion_type == IonType::Struct {
-      cursor.step_in()?;
-      {
-        let _ = skim_values(cursor, depth + 1)?;
-      }
+    } else if cursor.depth() > 0 { // it was `None`
       cursor.step_out()?;
+    } else {
+      break;
     }
-    current_ion_type = cursor.next()?;
   }
+  println!("Skimmed {} values", count);
   Ok(())
 }
 

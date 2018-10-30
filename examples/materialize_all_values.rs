@@ -1,0 +1,33 @@
+extern crate amzn_ion;
+
+use amzn_ion::binary::ion_cursor::{IonDataSource};
+use amzn_ion::binary::BinaryIonReader;
+use amzn_ion::result::IonResult;
+
+use std::fs::File;
+
+fn materialize_values_in_file(path: &str) -> IonResult<()> {
+  let file = File::open(path).expect("Unable to open file");
+  let mut reader = BinaryIonReader::new(file)?;
+
+  materialize_values(&mut reader)
+}
+
+fn materialize_values<R: IonDataSource>(reader: &mut BinaryIonReader<R>) -> IonResult<()> {
+  let mut count = 0;
+  for ion_value in reader.ion_dom_values(){//.take(5) {
+//    println!("{:#?}", ion_value?);
+    count += 1;
+  }
+
+  println!("Materialized {} top-level values", count);
+  Ok(())
+}
+
+fn main() {
+  let path = "/Users/zslayton/local_ion_data/ion_data2/item_change_listener.shorthand.log.2018-07-27-17";
+  match materialize_values_in_file(path) {
+    Ok(_) => {},
+    Err(error) => panic!("Failed to read the file: {:?}", error)
+  }
+}

@@ -1,6 +1,6 @@
 use failure::Error;
 use result::*;
-use types::ion_type::IonType;
+use types::IonType;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum IonTypeCode {
@@ -43,7 +43,7 @@ impl IonTypeCode {
         format!(
           "Attempted to make an IonType from an invalid type code: {:?}",
           self
-        ).as_ref()
+        )
       )
     };
     Ok(ion_type)
@@ -69,8 +69,8 @@ impl IonTypeCode {
       14 => Annotation,
       15 => Reserved,
       _ => {
-        return decoding_error::<IonTypeCode>(
-        format!("{:?} is not a valid header type code.", type_code).as_ref()
+        return decoding_error(
+        format!("{:?} is not a valid header type code.", type_code)
         );
       }
     };

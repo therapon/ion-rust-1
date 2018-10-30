@@ -1,4 +1,4 @@
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Copy, Clone)]
 pub enum IonType {
   Null,
   Boolean,

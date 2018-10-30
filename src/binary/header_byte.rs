@@ -1,4 +1,30 @@
+use types::IonType;
+use binary::ion_type_code::IonTypeCode;
+use binary::ion_cursor::IonValueHeader;
+use result::IonResult;
+
 const MAX_NIBBLE_SIZE: u8 = 16;
+
+lazy_static! {
+    pub static ref SLOW_HEADERS: Vec<IonResult<Option<IonValueHeader>>>= {
+        let mut headers = Vec::with_capacity(256);
+        for byte_value in 0..=255 {
+          headers.push(ion_value_header(byte_value));
+        }
+        headers
+    };
+}
+
+fn ion_value_header(byte: u8) -> IonResult<Option<IonValueHeader>> {
+  let (type_code, length_code) = nibbles_from_byte(byte);
+  let ion_type_code = IonTypeCode::from(type_code)?;
+  let ion_type = ion_type_code.as_type().ok();
+  Ok(Some(IonValueHeader {
+    ion_type,
+    ion_type_code,
+    length_code
+  }))
+}
 
 pub fn nibbles_from_byte(byte: u8) -> (u8, u8) {
   let left = byte >> 4;

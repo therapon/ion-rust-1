@@ -1,0 +1,22 @@
+[package]
+name = "ion-rust"
+version = "0.1.0"
+authors = ["Zack Slayton <zslayton@amazon.com>"]
+#edition = "2018"
+
+[dependencies]
+failure = "~0.1"
+failure_derive = "~0.1"
+bytes = "0.4.9"
+smallvec="0.6.4"
+chrono = "0.4"
+num-bigint = "0.2"
+bigdecimal = "0.0.14"
+lazy_static = "1.1.0"
+lifeguard = "0.6.0"
+
+[dev-dependencies]
+flate2 = "1.0.4"
+memmap = "0.7.0"
+madvise = "0.1.0"
+crossbeam = "0.5.0"

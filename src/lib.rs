@@ -1,5 +1,6 @@
 #![feature(specialization)]
 #![feature(nll)]
+#![feature(const_fn)]
 #![allow(dead_code)]
 
 #[macro_use]
@@ -11,12 +12,12 @@ extern crate bigdecimal;
 extern crate bytes;
 extern crate chrono;
 extern crate failure;
+extern crate lifeguard;
 extern crate num_bigint;
 extern crate smallvec;
-extern crate lifeguard;
 
 pub mod binary;
-pub mod result;
-pub mod types;
 pub mod ion_system;
+pub mod result;
 pub mod symbol_table;
+pub mod types;

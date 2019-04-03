@@ -1,18 +1,11 @@
 extern crate ion_rust;
 
-extern crate flate2;
-
 use ion_rust::binary::ion_cursor::IonDataSource;
 use ion_rust::binary::BinaryIonReader;
 use ion_rust::result::IonResult;
 use ion_rust::types::IonType;
 
-use flate2::bufread::GzDecoder;
-//extern crate jemallocator;
-//
-//#[global_allocator]
-//static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
+use num_traits::cast::ToPrimitive;
 use std::fs::File;
 
 fn skim_file(path: &str) -> IonResult<()> {
@@ -26,6 +19,7 @@ fn skim_file(path: &str) -> IonResult<()> {
 fn skim_values<R: IonDataSource>(reader: &mut BinaryIonReader<R>) -> IonResult<()> {
     use crate::IonType::*;
     let mut count = 0;
+    let mut accumulator: i64 = 20190403; // Using signed integer for easy comparison with Java
     loop {
         if let Some(ion_type) = reader.next()? {
             count += 1;
@@ -39,26 +33,34 @@ fn skim_values<R: IonDataSource>(reader: &mut BinaryIonReader<R>) -> IonResult<(
                     //          let _ = cursor.step_out()?;
                 }
                 String => {
-                    let _text = reader.string_ref_map(|_s| ())?.unwrap();
+                    //let _text = reader.string_ref_map(|_s| ())?.unwrap();
+                    accumulator ^= reader
+                        .string_ref_map(|s| s.chars().next().unwrap_or(0 as char) as i64)?
+                        .unwrap();
                     //          let _text = reader.read_string()?.unwrap();
                 }
                 Symbol => {
-                    let _symbol_id = reader.read_symbol_id()?.unwrap();
+                    accumulator ^= reader.read_symbol_id()?.unwrap() as i64;
                 }
                 Integer => {
-                    let _int = reader.read_i64()?.unwrap();
+                    accumulator ^= reader.read_i64()?.unwrap();
                 }
                 Float => {
-                    let _float = reader.read_f64()?.unwrap();
+                    accumulator ^= reader.read_f64()?.unwrap() as i64;
                 }
                 Decimal => {
-                    let _decimal = reader.read_decimal()?.unwrap();
+                    let bd = reader.read_decimal()?.unwrap();
+                    accumulator ^= bd.to_i64().unwrap();
                 }
                 Timestamp => {
-                    let _timestamp = cursor.read_timestamp()?.unwrap();
+                  let _timestamp = reader.read_timestamp()?.unwrap();
                 }
                 Boolean => {
-                    let _boolean = reader.read_bool()?.unwrap();
+                    if reader.read_bool()?.unwrap() {
+                        accumulator = accumulator ^ 8675309;
+                    } else {
+                        accumulator = accumulator ^ 24601;
+                    }
                 }
                 Blob => {
                     let _blob = reader.blob_ref_map(|_b| ())?.unwrap();
@@ -75,6 +77,7 @@ fn skim_values<R: IonDataSource>(reader: &mut BinaryIonReader<R>) -> IonResult<(
             break;
         }
     }
+    println!("Accumulator: {}", accumulator);
     println!("Skimmed {} values", count);
     Ok(())
 }

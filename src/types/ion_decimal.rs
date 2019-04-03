@@ -1,17 +1,15 @@
-use std::convert::From;
 use bigdecimal::BigDecimal;
+use std::convert::From;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
 pub struct IonDecimal {
-  value: BigDecimal
+    value: BigDecimal,
 }
 
 impl From<BigDecimal> for IonDecimal {
-  fn from(value: BigDecimal) -> Self {
-    IonDecimal {
-      value
+    fn from(value: BigDecimal) -> Self {
+        IonDecimal { value }
     }
-  }
 }
 //
 //impl Into<BigDecimal> for IonDecimal {
@@ -20,9 +18,12 @@ impl From<BigDecimal> for IonDecimal {
 //  }
 //}
 
-default impl <T> From<T> for IonDecimal where T: Into<BigDecimal> {
-  fn from(value: T) -> IonDecimal {
-    let big_decimal: BigDecimal = value.into();
-    big_decimal.into()
-  }
+default impl<T> From<T> for IonDecimal
+where
+    T: Into<BigDecimal>,
+{
+    fn from(value: T) -> IonDecimal {
+        let big_decimal: BigDecimal = value.into();
+        big_decimal.into()
+    }
 }

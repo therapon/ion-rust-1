@@ -2,7 +2,7 @@
 name = "ion-rust"
 version = "0.1.0"
 authors = ["Zack Slayton <zslayton@amazon.com>"]
-#edition = "2018"
+edition = "2018"
 
 [dependencies]
 failure = "~0.1"
@@ -20,3 +20,10 @@ flate2 = "1.0.4"
 memmap = "0.7.0"
 madvise = "0.1.0"
 crossbeam = "0.5.0"
+jemallocator = "0.3.0"
+num-traits = "0.2.6"
+
+[profile.release]
+debug = true
+lto = true
+codegen-units = 1

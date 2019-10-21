@@ -21,7 +21,7 @@ impl VarInt {
 
     let first_byte: u8 = data_source.bytes().next().unwrap()?;
     let is_positive: bool = (first_byte & 0b0100_0000) == 0;
-    let sign: VarIntStorage = if is_positive {1} else {-1};
+    let sign: VarIntStorage = if is_positive { 1 } else { -1 };
 
     let mut number_of_bytes = 1;
     let mut magnitude = (first_byte & 0b0011_1111) as VarIntStorage;
@@ -36,14 +36,14 @@ impl VarInt {
     }
 
     // All of the other bytes are handled in a manner similar to VarUInt.
-
+    // TODO: Optimize this by using the BufRead interface as we've done in VarUInt
     for byte_result in data_source.bytes() {
       let byte = byte_result?;
       number_of_bytes += 1;
       let lower_seven = 0b0111_1111 & byte;
       let lower_seven = lower_seven as VarIntStorage;
-      magnitude = magnitude<<7;
-      magnitude = magnitude | lower_seven;
+      magnitude <<= 7;
+      magnitude |= lower_seven;
       if byte >= 0b1000_0000 {
         break;
       }

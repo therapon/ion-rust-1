@@ -1,4 +1,3 @@
-use failure::Error;
 use result::*;
 use types::IonType;
 
@@ -23,9 +22,9 @@ pub enum IonTypeCode {
 }
 
 impl IonTypeCode {
-  pub fn as_type(&self) -> IonResult<IonType> {
+  pub fn as_type(self) -> IonResult<IonType> {
     use self::IonTypeCode::*;
-    let ion_type = match *self {
+    let ion_type = match self {
       Null => IonType::Null,
       Boolean => IonType::Boolean,
       PositiveInteger | NegativeInteger => IonType::Integer,

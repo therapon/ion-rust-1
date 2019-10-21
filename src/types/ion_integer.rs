@@ -3,7 +3,7 @@ use std::convert::From;
 //TODO: This value's internal representation should be flexible enough to support BigInteger-style
 // values. For now, we're just starting with i64.
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct IonInteger {
   value: i64
 }

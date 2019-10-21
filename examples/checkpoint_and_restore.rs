@@ -2,11 +2,10 @@ extern crate amzn_ion;
 
 use std::fs::File;
 use std::io::BufReader;
-use std::io;
 use amzn_ion::binary::ion_cursor::BinaryIonCursor;
 use amzn_ion::result::IonResult;
 use amzn_ion::binary::ion_cursor::CursorState;
-use amzn_ion::types::ion_type::IonType;
+use amzn_ion::types::*;
 
 fn test_checkpoint_and_restore() {
 //    let path = "/Users/zslayton/local_ion_data/ion_data2/annotated_values.10n";
@@ -27,7 +26,9 @@ fn checkpoint_and_restore(path: &str) -> IonResult<()> {
 
 
   // Make a checkpoint
+  cursor.where_am_i();
   let checkpoint = cursor.checkpoint();
+  println!("Checkpoint before: {:?}", checkpoint);
   use std::mem::size_of;
   println!("Size of CursorState: {} bytes", size_of::<CursorState>());
   // Read an event
@@ -36,19 +37,25 @@ fn checkpoint_and_restore(path: &str) -> IonResult<()> {
   cursor.step_in()?;
   let ion_type = cursor.next()?.expect("Missing timestamp.");
   assert_eq!(ion_type, IonType::Integer);
-  let timestamp1 = cursor.integer_value()?.expect("Missing integer.");
+  let timestamp1 = cursor.read_i64()?.expect("Missing integer.");
   println!("Timestamp 1: {:?}", timestamp1);
 
   // Rewind to the checkpoint
-  let _ = cursor.restore(checkpoint)?;
+  let old_state = cursor.restore(checkpoint)?;
+  println!("Overwritten: {:?}", old_state);
+  let restored_state = cursor.checkpoint();
+  println!("Restored: {:?}", restored_state);
 
   // Read the same event
   let ion_type = cursor.next()?.expect("Not enough values in the file 2.");
+//  println!("{:?}", cursor.read_symbol_id());
+//  let it = cursor.next()?;
+//  println!("{:?}", it);
   assert_eq!(ion_type, IonType::Struct);
   cursor.step_in()?;
   let ion_type = cursor.next()?.expect("Missing timestamp 2.");
   assert_eq!(ion_type, IonType::Integer);
-  let timestamp2 = cursor.integer_value()?.expect("Missing integer 2.");
+  let timestamp2 = cursor.read_i64()?.expect("Missing integer 2.");
   println!("Timestamp 2: {:?}", timestamp2);
 
   assert_eq!(timestamp1, timestamp2);

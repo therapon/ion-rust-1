@@ -1,4 +1,3 @@
-use types::IonType;
 use binary::ion_type_code::IonTypeCode;
 use binary::ion_cursor::IonValueHeader;
 use result::IonResult;
@@ -36,8 +35,8 @@ pub fn byte_from_nibbles(left: u8, right: u8) -> u8 {
   assert!(left < MAX_NIBBLE_SIZE);
   assert!(right < MAX_NIBBLE_SIZE);
   let mut byte = 0u8;
-  byte = byte | (left << 4);
-  byte = byte | (0b00001111 & right);
+  byte |= left << 4;
+  byte |= 0b0000_1111 & right;
   byte
 }
 

@@ -2,7 +2,7 @@ extern crate amzn_ion;
 
 use amzn_ion::binary::ion_cursor::{IonDataSource, BinaryIonCursor};
 use amzn_ion::result::IonResult;
-use amzn_ion::types::ion_type::IonType;
+use amzn_ion::types::IonType;
 
 use std::fs::File;
 use std::io::BufReader;

@@ -1,11 +1,7 @@
-use std::error::Error;
 use std::io::{Read, Seek};
-use std::collections::vec_deque::VecDeque;
 
 use bytes::BigEndian;
 use bytes::ByteOrder;
-
-use smallvec::SmallVec;
 
 use binary::header_byte::*;
 use binary::var_uint::VarUInt;
@@ -14,36 +10,17 @@ use binary::uint::UInt;
 
 use types::*;
 
-use result::{IonResult, IonError, io_error, decoding_error};
+use result::{IonResult, IonError, decoding_error};
 
-use std::ops::Deref;
-use std::ops::DerefMut;
-use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
-//use types::ion_string::IonStringRef;
-//use types::ion_boolean::IonBoolean;
-//use types::ion_integer::IonInteger;
-//use types::ion_float::IonFloat;
-//use types::ion_symbol::{IonSymbol, IonSymbolId};
-//use types::ion_blob::IonBlobRef;
-//use types::ion_clob::IonClobRef;
-//use types::ion_timestamp::IonTimestamp;
 use binary::var_int::VarInt;
 
 use chrono::prelude::*;
 use chrono::offset::FixedOffset;
-//use types::ion_decimal::IonDecimal;
 use binary::int::Int;
 use bigdecimal::BigDecimal;
-use std::io::ErrorKind;
-use std::env::Args;
-//use types::ion_string::IonString;
-//use types::ion_blob::IonBlob;
-//use types::ion_clob::IonClob;
-//use types::ion_value::IonValue;
-//use types::ion_null::IonNull;
-//use types::ion_null::IonNull;
+use std::io;
 
 const LENGTH_CODE_NULL: u8 = 15;
 const LENGTH_CODE_VAR_UINT: u8 = 14;
@@ -105,31 +82,39 @@ pub struct CursorState {
   index_at_depth: usize, // The number of values (starting with 0) read at the current depth
   is_in_struct: bool, // Whether this level of descent is within a struct
   value: CursorValue, // Information about the value on which the cursor is currently sitting.
+  parents: Vec<CursorValue>,
 }
 
 // A low-level reader that offers no validation or symbol management.
 // It can only move and return the current value.
 pub struct BinaryIonCursor<R> where R: IonDataSource {
-  data_source: BufReader<R>,
+  data_source: R,
   buffer: Vec<u8>, // Used for individual data_source.read() calls independent of input buffering
   cursor: CursorState,
-  parents: Vec<CursorValue>,
   // TODO: This should be a const living somewhere. Unfortunately, `lazy_static` adds a LOT of accessor overhead.
   header_cache: Vec<IonResult<Option<IonValueHeader>>>
 }
 
-pub trait IonDataSource: Read {
+//TODO Move other I/O functions here? Remove all I/O functions and just depend on BufRead?
+pub trait IonDataSource: BufRead {
   fn skip_bytes(&mut self, number_of_bytes: usize) -> IonResult<()>;
 }
 
-//default impl <T> DataSource for T where T: Read {
-impl <T> IonDataSource for T where T: Read {
-  fn skip_bytes(&mut self, number_of_bytes: usize) -> IonResult<()> {
+impl <T: BufRead> IonDataSource for T {
+//impl <T> IonDataSource for T where T: BufRead {
+  default fn skip_bytes(&mut self, number_of_bytes: usize) -> IonResult<()> {
     use std::io;
     let _bytes_copied = io::copy(
       &mut self.by_ref().take(number_of_bytes as u64),
       &mut io::sink()
     )?;
+    Ok(())
+  }
+}
+
+impl <T: BufRead + AsRef<[u8]>> IonDataSource for io::Cursor<T> {
+  fn skip_bytes(&mut self, number_of_bytes: usize) -> IonResult<()> {
+    self.set_position(self.position() + number_of_bytes as u64);
     Ok(())
   }
 }
@@ -148,17 +133,36 @@ impl <T> IonDataSource for T where T: Read {
 //  }
 //}
 
+//impl <R> BinaryIonCursor<io::Cursor<R>> where R: IonDataSource + AsRef<[u8]> {
+//  pub fn region_cursor(&mut self, start: usize, end: usize) -> Self {
+//    let state = self.checkpoint();
+//    let io_cursor = &self.data_source.clone();
+//    let mut region_cursor = BinaryIonCursor::unsafe_new(io_cursor);
+//    region_cursor.restore(state);
+//    region_cursor
+//  }
+//}
+
 impl <R> BinaryIonCursor<R> where R: IonDataSource + Seek {
   pub fn checkpoint(&self) -> CursorState {
     self.cursor.clone()
   }
 
-  pub fn restore(&mut self, mut saved_state: CursorState) -> IonResult<()> {
+  pub fn where_am_i(&mut self) {
+    use std::io::{Seek, SeekFrom};
+    let seeker = (&mut self.data_source as &mut Seek);
+    let position = seeker.seek(SeekFrom::Current(0i64));
+    let next_bytes = &self.data_source.fill_buf().unwrap()[..8];
+    println!("Where am I?: {:?}, {:?}", position, next_bytes);
+  }
+
+  pub fn restore(&mut self, mut saved_state: CursorState) -> IonResult<CursorState> {
    use std::mem;
     use std::io::{Seek, SeekFrom};
     mem::swap(&mut self.cursor, &mut saved_state);
-    (self.data_source.get_mut() as &mut Seek).seek(SeekFrom::Start(self.cursor.bytes_read as u64))?;
-    Ok(())
+    let seeker = (&mut self.data_source as &mut Seek);
+    seeker.seek(SeekFrom::Start(self.cursor.bytes_read as u64))?;
+    Ok(saved_state)
   }
 }
 
@@ -172,6 +176,23 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource + Seek {
 //    self.cursor.bytes_read += number_of_bytes;
 //    //debug!("After seek, bytes_read: {}", self.cursor.bytes_read);
 //    Ok(())
+//  }
+//}
+
+//struct BinaryIonCursorPositions<'cursor, R: IonDataSource> {
+//  cursor: &'cursor mut BinaryIonCursor<R>
+//}
+//
+//impl <'cursor, R: IonDataSource> Iterator for BinaryIonCursorPositions<'cursor, R> {
+//  type Item = IonResult<(IonType, &'cursor mut BinaryIonCursor<R>)>;
+//
+//  fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+//    let ion_type = match self.cursor.next() {
+//      Ok(Some(ion_type)) => ion_type,
+//      Ok(None) => return None,
+//      Err(error) => return Some(Err(error))
+//    };
+//    Some(Ok((ion_type, self.cursor)))
 //  }
 //}
 
@@ -189,8 +210,13 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
     self.cursor.depth
   }
 
-  pub fn integer_value(&mut self) -> IonResult<Option<IonInteger>> {
-    use self::IonTypeCode::*;
+  // TODO:
+  // - Detect overflow and return None
+  // - Add an integer_size() method that indicates whether the current value will
+  //   fit in an i32, i64, i128 or BigInteger
+  pub fn read_i64(&mut self) -> IonResult<Option<i64>> {
+//    println!("type: {:?}", self.cursor.value.ion_type);
+//    println!("is_null: {:?}", self.cursor.value.is_null);
     if self.cursor.value.ion_type != IonType::Integer ||  self.cursor.value.is_null {
       return Ok(None);
     }
@@ -199,19 +225,44 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
       panic!("You cannot read the same integer value more than once.");
     }
 
+//    self.unchecked_read_i64().map(|r| Some(r))
+    self.unchecked_read_i64()
+  }
+
+  //TODO: pub crate, Option or not?
+
+  pub fn unchecked_read_i64(&mut self) -> IonResult<Option<i64>> {
+    use self::IonTypeCode::*;
+    if self.cursor.value.ion_type != IonType::Integer || self.cursor.value.is_null {
+      return Ok(None);
+    }
+
+//    if self.cursor.value.length_in_bytes > 0 && self.finished_reading_value() {
+//      panic!("You cannot read the same integer value more than once.");
+//    }
+
     let magnitude = self.read_value_as_uint()?.value();
 
     let value = match self.cursor.value.header.ion_type_code {
-      PositiveInteger => IonInteger::from(magnitude as i64),
-      NegativeInteger => IonInteger::from(magnitude as i64 * -1),
+      PositiveInteger => magnitude as i64,
+      NegativeInteger => -(magnitude as i64),
       _ => unreachable!("The Ion Type Code must be one of the above to reach this point.")
     };
 
-    return Ok(Some(value));
+    Ok(Some(value))
   }
 
-  pub fn float_value(&mut self) -> IonResult<Option<IonFloat>> {
-    if self.cursor.value.ion_type != IonType::Float ||  self.cursor.value.is_null {
+  //TODO: Currently this just defers to read_f64 and then downcasts. Is there a better behavior?
+  pub fn read_f32(&mut self) -> IonResult<Option<f32>> {
+    match self.read_f64() {
+      Ok(Some(value)) => Ok(Some(value as f32)), // Lossy if the value was 64 bits
+      Ok(None) => Ok(None),
+      Err(e) => Err(e)
+    }
+  }
+
+  pub fn read_f64(&mut self) -> IonResult<Option<f64>> {
+    if self.cursor.value.ion_type != IonType::Float || self.cursor.value.is_null {
       return Ok(None);
     }
 
@@ -224,7 +275,7 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
     self.parse_n_bytes(number_of_bytes, |buffer: &[u8]| {
       let value = match number_of_bytes {
         0 => 0f64,
-        4 => BigEndian::read_f32(buffer) as f64,
+        4 => f64::from(BigEndian::read_f32(buffer)),
         8 => BigEndian::read_f64(buffer),
         _ => return decoding_error(
           &format!(
@@ -233,33 +284,32 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
           )
         )
       };
-      Ok(Some(IonFloat::from(value)))
+      Ok(Some(value))
     })
   }
 
-  pub fn boolean_value(&mut self) -> Result<Option<IonBoolean>, IonError> {
-    if self.cursor.value.ion_type != IonType::Boolean ||  self.cursor.value.is_null {
+  pub fn read_bool(&mut self) -> Result<Option<bool>, IonError> {
+    if self.cursor.value.ion_type != IonType::Boolean || self.cursor.value.is_null {
       return Ok(None);
     }
 
-    // No reading from the stream occurs -- the header contained all of the information we needed.
-
+    // No reading from the stream occurs -- the header contains all of the information we need.
     let representation = self.cursor.value.header.length_code;
 
     match representation {
-      0 => Ok(Some(IonBoolean::from(false))),
-      1 => Ok(Some(IonBoolean::from(true))),
+      0 => Ok(Some(false)),
+      1 => Ok(Some(true)),
       _ => decoding_error(
         &format!("Found a boolean value with an illegal representation: {}", representation)
       )
     }
   }
 
-  pub fn string_value(&mut self) -> IonResult<Option<IonString>> {
-    self.string_ref_map(|s: IonStringRef| s.to_string().into())
+  pub fn read_string(&mut self) -> IonResult<Option<String>> {
+    self.string_ref_map(|s: &str| s.into())
   }
 
-  pub fn string_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: Fn(IonStringRef) -> T {
+  pub fn string_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: FnOnce(&str) -> T {
     use std::str;
     if self.cursor.value.ion_type != IonType::String || self.cursor.value.is_null {
       return Ok(None);
@@ -273,7 +323,7 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
 
     self.parse_n_bytes(length_in_bytes, |buffer: &[u8]| {
       let string_ref = match str::from_utf8(buffer) {
-        Ok(utf8_text) => IonStringRef::from(utf8_text),
+        Ok(utf8_text) => utf8_text,
         Err(utf8_error) =>  return decoding_error(
           &format!(
             "The requested string was not valid UTF-8: {:?}",
@@ -285,8 +335,8 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
     })
   }
 
-  pub fn symbol_id_value(&mut self) -> IonResult<Option<IonSymbolId>> {
-    if self.cursor.value.ion_type != IonType::Symbol ||  self.cursor.value.is_null {
+  pub fn read_symbol_id(&mut self) -> IonResult<Option<IonSymbolId>> {
+    if self.cursor.value.ion_type != IonType::Symbol || self.cursor.value.is_null {
       return Ok(None);
     }
 
@@ -295,15 +345,17 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
     }
 
     let symbol_id = self.read_value_as_uint()?.value() as usize;
-    Ok(Some(Into::into(symbol_id)))
+    //TODO: Should this return a rust type like the rest of the API? A usize, perhaps, since this
+    // will be used as a Vec index?
+    Ok(Some(IonSymbolId::from(symbol_id)))
   }
 
-  pub fn blob_value(&mut self) -> IonResult<Option<IonBlob>> {
+  pub fn read_blob_bytes(&mut self) -> IonResult<Option<Vec<u8>>> {
     self.blob_ref_map(|b| b.into())
   }
 
-  pub fn blob_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: Fn(IonBlobRef) -> T {
-    if self.cursor.value.ion_type != IonType::Blob ||  self.cursor.value.is_null {
+  pub fn blob_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: FnOnce(&[u8]) -> T {
+    if self.cursor.value.ion_type != IonType::Blob || self.cursor.value.is_null {
       return Ok(None);
     }
 
@@ -313,16 +365,15 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
 
     let number_of_bytes = self.cursor.value.length_in_bytes;
     self.parse_n_bytes(number_of_bytes, |buffer: &[u8]| {
-      let blob_ref: IonBlobRef = From::from(buffer);
-      Ok(Some(f(blob_ref)))
+      Ok(Some(f(buffer)))
     })
   }
 
-  pub fn clob_value(&mut self) -> IonResult<Option<IonClob>> {
+  pub fn read_clob_bytes(&mut self) -> IonResult<Option<Vec<u8>>> {
     self.clob_ref_map(|c| c.into())
   }
 
-  pub fn clob_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: Fn(IonClobRef) -> T {
+  pub fn clob_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: FnOnce(&[u8]) -> T {
     if self.cursor.value.ion_type != IonType::Clob ||  self.cursor.value.is_null {
       return Ok(None);
     }
@@ -333,12 +384,11 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
 
     let number_of_bytes = self.cursor.value.length_in_bytes;
     self.parse_n_bytes(number_of_bytes, |buffer: &[u8]| {
-      let clob_ref: IonClobRef = From::from(buffer);
-      Ok(Some(f(clob_ref)))
+      Ok(Some(f(buffer)))
     })
   }
 
-  pub fn decimal_value(&mut self) -> IonResult<Option<IonDecimal>> {
+  pub fn read_decimal(&mut self) -> IonResult<Option<BigDecimal>> {
     if self.cursor.value.ion_type != IonType::Decimal ||  self.cursor.value.is_null {
       return Ok(None);
     }
@@ -355,15 +405,15 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
 
     // BigDecimal uses 'scale' rather than 'exponent' in its API, which is a count of the number of
     // decimal places. It's effectively `exponent * -1`.
-    Ok(Some(BigDecimal::new(coefficient.into(), exponent * -1).into()))
+    Ok(Some(BigDecimal::new(coefficient.into(), -exponent)))
   }
 
   fn finished_reading_value(&mut self) -> bool {
     self.cursor.bytes_read >= self.cursor.value.last_byte
   }
 
-  pub fn timestamp_value(&mut self) -> IonResult<Option<IonTimestamp>> {
-    if self.cursor.value.ion_type != IonType::Timestamp ||  self.cursor.value.is_null {
+  pub fn read_timestamp(&mut self) -> IonResult<Option<DateTime<FixedOffset>>> {
+    if self.cursor.value.ion_type != IonType::Timestamp || self.cursor.value.is_null {
       return Ok(None);
     }
 
@@ -418,7 +468,7 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
                 .and_hms(hour as u32, minute as u32, second as u32);
     let offset = FixedOffset::west(offset_minutes as i32 * 60i32);
     let datetime = offset.from_utc_datetime(&naive_datetime);
-    Ok(Some(From::from(datetime)))
+    Ok(Some(datetime))
   }
 
   pub fn annotation_ids<'a>(&'a self) -> impl Iterator<Item=IonSymbolId> + 'a {
@@ -434,10 +484,14 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
       (IonType::Struct, Some(symbol_id)) => symbol_id,
       _ => return false
     };
-    return symbol_id == IonSymbolId::from(3u64)
+    symbol_id == IonSymbolId::from(3u64)
   }
 
-  pub fn new(mut data_source: R) -> IonResult<BinaryIonCursor<R>> {
+  //TODO: This can just return Self if we defer reading the IVM.
+  //We should do this anyway because reading the IVM should happen inside of next().
+  //Any number of IVMs can appear in the input and we need to reset the symbol table when this
+  //occurs.
+  pub fn new(mut data_source: R) -> IonResult<Self> {
     let buffer = &mut [0u8; 4];
     let _ = data_source.read_exact(buffer)?;
     if *buffer != IVM {
@@ -451,24 +505,42 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
     }
 
     Ok(BinaryIonCursor {
-      data_source: BufReader::with_capacity(32 * 1024, data_source),
+      data_source: data_source,
       buffer: vec![0; 1024],
       cursor: CursorState {
         bytes_read: IVM_LENGTH,
         depth: 0,
         index_at_depth: 0,
         is_in_struct: false,
-        value: Default::default()
+        value: Default::default(),
+        parents: Vec::new(),
       },
-      parents: Vec::new(),
       header_cache: SLOW_HEADERS.clone(), // TODO: Bad. Make this static.
     })
+  }
+
+  // not really unsafe, just doesn't attempt to read() yet, so it won't tell you whether the
+  // data source is really binary Ion.
+  pub fn unsafe_new(data_source: R) -> Self {
+    BinaryIonCursor {
+      data_source: data_source,
+      buffer: vec![0; 1024],
+      cursor: CursorState {
+        bytes_read: 0,
+        depth: 0,
+        index_at_depth: 0,
+        is_in_struct: false,
+        value: Default::default(),
+        parents: Vec::new(),
+      },
+      header_cache: SLOW_HEADERS.clone(), // TODO: Bad. Make this static.
+    }
   }
 
   pub fn next(&mut self) -> IonResult<Option<IonType>> {
     let _ = self.skip_current_value()?;
 
-    if let Some(ref parent) = self.parents.last() {
+    if let Some(ref parent) = self.cursor.parents.last() {
       // If the cursor is nested inside a parent object, don't attempt to read beyond the end of
       // the parent. Users can call '.step_out()' to progress beyond the container.
       if self.cursor.bytes_read >= parent.last_byte {
@@ -503,7 +575,7 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
       self.cursor.value.header = header;
     }
 
-    let _ = self.process_header_by_type_code(&header)?;
+    let _ = self.process_header_by_type_code(header)?;
 
     self.cursor.index_at_depth += 1;
     self.cursor.value.index_at_depth = self.cursor.index_at_depth;
@@ -558,31 +630,27 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
       buffer = required_buffer;
     }
 
-    let _ = self.data_source.read_exact(buffer)?;
+    self.data_source.read_exact(buffer)?;
     self.cursor.bytes_read += number_of_bytes;
     Ok(())
   }
 
+  fn parse_n_bytes<T, F>(&mut self, number_of_bytes: usize, processor: F) -> IonResult<T>
+    where F: FnOnce(&[u8]) -> IonResult<T> {
 
-  // TODO: This function doesn't work when T is a reference because we can't consume the bytes if
-  // the return value is still holding onto them.
-  fn parse_n_bytes<T, F>(&mut self, number_of_bytes: usize, mut processor: F) -> IonResult<T>
-    where F: FnMut(&[u8]) -> IonResult<T> {
-
-    // If the requested value is already in our BufReader, there's no need to copy it out into a
-    // separate buffer. We can return a slice of the BufReader buffer and consume() that number of
+    // If the requested value is already in our input buffer, there's no need to copy it out into a
+    // separate buffer. We can return a slice of the input buffer and consume() that number of
     // bytes.
 
-    if self.data_source.buffer().len() >= number_of_bytes {
+    let buffer = self.data_source.fill_buf()?;
+
+    if buffer.len() >= number_of_bytes {
 //      println!("We have {} bytes, we need {} bytes.", self.data_source.buffer().len(), number_of_bytes);
-      let result = processor(&self.data_source.buffer()[..number_of_bytes]);
+      let result = processor(&buffer[..number_of_bytes]);
       self.data_source.consume(number_of_bytes);
       self.cursor.bytes_read += number_of_bytes;
       return result;
     }
-
-    // TODO: Is it worth using .fill_buf() if number_of_bytes < self.data_source.capacity()?
-    // It's likely better, but would only optimize reads on the cusp of the buffer.
 
     // Otherwise, read the value into self.buffer, a growable Vec.
     // It would be nice to use the buffer Vec as-is when it has enough capacity. Unfortunately,
@@ -590,29 +658,28 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
     // Thus, we can only optimize this for the case where the vec's .len() is larger than what we need.
     // As a minor hack, we can ensure the vec is always full of 0s so that len() == capacity.
 
-    let buffer: &mut [u8];
     // Grow the Vec if needed
-    if self.buffer.len() < number_of_bytes {
+    let buffer: &mut [u8] = if self.buffer.len() < number_of_bytes {
       self.buffer.resize(number_of_bytes, 0);
-      buffer = self.buffer.as_mut();
+      self.buffer.as_mut()
     } else {
       // Otherwise, split the Vec's underlying storage to get a &mut [u8] slice of the required size
       let (required_buffer, _) = self.buffer.split_at_mut(number_of_bytes);
-      buffer = required_buffer;
-    }
+      required_buffer
+    };
 
-    let _ = self.data_source.read_exact(buffer)?;
+    self.data_source.read_exact(buffer)?;
     let result = processor(buffer);
     self.cursor.bytes_read += number_of_bytes;
     result
   }
 
-  fn process_header_by_type_code(&mut self, header: &IonValueHeader) -> IonResult<()> {
+  fn process_header_by_type_code(&mut self, header: IonValueHeader) -> IonResult<()> {
     use self::IonTypeCode::*;
 
 //    self.cursor.value.ion_type = header.ion_type_code.as_type()?;
     self.cursor.value.ion_type = header.ion_type.unwrap();
-    self.cursor.value.header = *header;
+    self.cursor.value.header = header;
     self.cursor.value.is_null = header.length_code == LENGTH_CODE_NULL;
 
     let length = match header.ion_type_code {
@@ -690,32 +757,18 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
     };
 
     self.header_cache[next_byte as usize].clone()
-
-//    HEADERS.with(|headers| headers[next_byte as usize].clone())
-//    SLOW_HEADERS[next_byte as usize].clone()
-//    self.header_cache[next_byte as usize].clone()
-
-//    //debug!("Next byte: {} ({:X})", next_byte, next_byte);
-//    let (type_code, length_code) = nibbles_from_byte(next_byte);
-//    let ion_type_code = IonTypeCode::from(type_code)?;
-//    let header = IonValueHeader {
-//      ion_type: ion_type_code.as_type()?,
-//      ion_type_code,
-//      length_code
-//    };
-//    //debug!("Next header at byte {}: {:?}", self.cursor.bytes_read, &header);
-//    Ok(Some(header))
   }
 
   fn next_byte(&mut self) -> IonResult<Option<u8>> {
     // If the buffer is empty, fill it and check again.
-    if self.data_source.buffer().len() == 0 && self.data_source.fill_buf()?.len() == 0 {
+    let buffer = self.data_source.fill_buf()?;
+    if buffer.is_empty() {
       // If the buffer is still empty after filling it, we're out of data.
       return Ok(None);
     }
 
     // Return the first byte from the buffer.
-    let byte: u8 = self.data_source.buffer()[0];
+    let byte: u8 = buffer[0];
     self.data_source.consume(1);
     self.cursor.bytes_read += 1;
 
@@ -723,13 +776,12 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
   }
 
   fn skip_bytes(&mut self, number_of_bytes: usize) -> IonResult<()> {
-    use std::io;
     if number_of_bytes == 0 {
       return Ok(());
     }
 //    println!("Before seek, bytes_read: {}, number to skip: {}", self.cursor.bytes_read, number_of_bytes);
 
-    let _ = (&mut self.data_source as &mut IonDataSource).skip_bytes(number_of_bytes)?;
+    (&mut self.data_source as &mut IonDataSource).skip_bytes(number_of_bytes)?;
     self.cursor.bytes_read += number_of_bytes;
 //    println!("After seek, bytes_read: {}", self.cursor.bytes_read);
     Ok(())
@@ -786,20 +838,16 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
 
   pub fn step_in(&mut self) -> IonResult<()> {
     use self::IonType::*;
-    match self.cursor.value.ion_type {
-      Struct => {
-        self.cursor.is_in_struct = true;
-      },
-      List | SExpression => {
-        self.cursor.is_in_struct = false;
-      },
+    self.cursor.is_in_struct = match self.cursor.value.ion_type {
+      Struct => true,
+      List | SExpression => false,
       _ => panic!("You cannot step into a(n) {:?}", self.cursor.value.ion_type)
-    }
+    };
 //    let parent = self.cursor.value.clone();
 //    self.cursor.value.parent_index = Some(Rc::new(parent));
     //debug!("Stepping into parent: {:?}", parent);
-    self.cursor.value.parent_index = Some(self.parents.len());
-    self.parents.push(self.cursor.value.clone());
+    self.cursor.value.parent_index = Some(self.cursor.parents.len());
+    self.cursor.parents.push(self.cursor.value.clone());
     self.cursor.depth += 1;
     self.cursor.index_at_depth = 0;
     Ok(())
@@ -816,7 +864,7 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
 //      };
 
       // Remove the last parent from the parents vec
-      let mut parent = self.parents
+      let mut parent = self.cursor.parents
         .pop()
         .expect("You cannot step out of the root level.");
 
@@ -836,7 +884,7 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
 
     // Check to see what the new top of the parents stack is
 
-    if let Some(ref parent) = self.parents.last() {
+    if let Some(ref parent) = self.cursor.parents.last() {
       self.cursor.is_in_struct = parent.ion_type == IonType::Struct;
     } else {
       self.cursor.is_in_struct = false;
@@ -851,7 +899,7 @@ impl <R> BinaryIonCursor<R> where R: IonDataSource {
     self.cursor.index_at_depth = self.cursor.value.index_at_depth;
     self.cursor.depth -= 1;
     //debug!("Stepping out by skipping {} bytes.", bytes_to_skip);
-    let _ = self.skip_bytes(bytes_to_skip)?;
+    self.skip_bytes(bytes_to_skip)?;
     //debug!("After stepping out, bytes_read is: {}", self.cursor.bytes_read);
     Ok(())
   }

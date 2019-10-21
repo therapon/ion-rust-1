@@ -1,7 +1,7 @@
 use std::convert::From;
 use types::*;
 
-#[derive(Debug, PartialEq, PartialOrd, Clone)]
+#[derive(Debug, PartialEq, PartialOrd, /*Clone <-- RcRecycled */)]
 pub struct IonSExpression {
   values: Vec<IonDomValue>
 }

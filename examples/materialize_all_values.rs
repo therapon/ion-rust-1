@@ -6,16 +6,23 @@ use amzn_ion::result::IonResult;
 
 use std::fs::File;
 
+//extern crate jemallocator;
+
+//#[global_allocator]
+//static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 fn materialize_values_in_file(path: &str) -> IonResult<()> {
   let file = File::open(path).expect("Unable to open file");
-  let mut reader = BinaryIonReader::new(file)?;
+  let buf_reader = std::io::BufReader::with_capacity(64 * 1024, file);
+  let mut reader = BinaryIonReader::new(buf_reader)?;
 
   materialize_values(&mut reader)
 }
 
 fn materialize_values<R: IonDataSource>(reader: &mut BinaryIonReader<R>) -> IonResult<()> {
   let mut count = 0;
-  for ion_value in reader.ion_dom_values(){//.take(5) {
+  for ion_value in reader.ion_dom_values() {
+//  for ion_value in reader.ion_dom_values().take(5) {
 //    println!("{:#?}", ion_value?);
     count += 1;
   }

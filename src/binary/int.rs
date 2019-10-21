@@ -20,15 +20,15 @@ impl Int {
 
     let mut magnitude: IntStorage;
 
-    let first_byte: i64 = data_source.bytes().next().unwrap()? as IntStorage;
+    let first_byte: i64 = i64::from(data_source.bytes().next().unwrap()?);
     let sign: IntStorage = if first_byte & 0b1000_0000 == 0 {1} else {-1};
     magnitude = first_byte & 0b0111_1111;
 
     //TODO: Read `length - 1` bytes at once instead of error handling each byte
     for byte in data_source.bytes().take(length - 1) {
-      let byte = (byte?) as IntStorage;
-      magnitude = magnitude << 8;
-      magnitude = magnitude | byte;
+      let byte = i64::from(byte?);
+      magnitude <<= 8;
+      magnitude |= byte;
     }
     Ok(Int {
       size_in_bytes: length,

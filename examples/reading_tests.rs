@@ -21,7 +21,7 @@ fn reading_tests() -> IonResult<()> {
   let mut cursor = BinaryIonCursor::new(&mut input)?;
   let ion_type = cursor.next()?.unwrap();
   let decimal = cursor
-    .decimal_value()?
+    .read_decimal()?
     .unwrap();
 
   println!("Decimal value: {:?}", decimal);
@@ -40,7 +40,7 @@ fn reading_tests() -> IonResult<()> {
   let mut cursor = BinaryIonCursor::new(&mut input)?;
   let ion_type = cursor.next()?.unwrap();
   let decimal = cursor
-    .decimal_value()?
+    .read_decimal()?
     .unwrap();
 
   println!("Decimal value: {:?}", decimal);
@@ -59,7 +59,7 @@ fn reading_tests() -> IonResult<()> {
   let mut cursor = BinaryIonCursor::new(&mut input)?;
   let ion_type = cursor.next()?.unwrap();
   let decimal = cursor
-    .decimal_value()?
+    .read_decimal()?
     .unwrap();
 
   println!("Decimal value: {:?}", decimal);

@@ -1,34 +1,46 @@
-use std::io::Read;
 use binary::ion_cursor::BinaryIonCursor;
 use binary::ion_cursor::IonDataSource;
-use binary::symbol_table::SymbolTable;
 use result::*;
 use types::*;
-use std::collections::BTreeMap;
+use bigdecimal::BigDecimal;
+use chrono::DateTime;
+use chrono::FixedOffset;
+use std::rc::Rc;
+use ::ion_system::IonSystem;
+use ::symbol_table::SymbolTable;
+use std::io;
 
 pub struct BinaryIonReader<D: IonDataSource> {
   pub symbols: SymbolTable,
-  pub cursor: BinaryIonCursor<D>
+  pub cursor: BinaryIonCursor<D>,
+  pub ion_system: IonSystem
 }
 
 impl <D: IonDataSource> BinaryIonReader<D> {
-  pub fn new(data_source: D) -> IonResult<BinaryIonReader<D>> {
+  pub fn new(data_source: D) -> IonResult<Self> {
     Ok(BinaryIonReader {
       symbols: SymbolTable::new(),
-      cursor: BinaryIonCursor::new(data_source)?
+      cursor: BinaryIonCursor::new(data_source)?,
+      ion_system: IonSystem::new()
     })
   }
 
+  pub fn symbol_table(&self) -> &SymbolTable {
+    &self.symbols
+  }
+
+  #[inline]
   pub fn next(&mut self) -> IonResult<Option<IonType>> {
     let ion_type_option = self.cursor.next()?;
     if self.cursor.value_is_symbol_table() {
       self.read_local_symbol_table()?;
-      return self.cursor.next();
+      return self.next();
     }
     Ok(ion_type_option)
   }
 
   fn read_local_symbol_table(&mut self) -> IonResult<()> {
+//    println!("Reading LST!");
     self.step_in()?;
     loop {
       let ion_type = self.next()?;
@@ -42,6 +54,7 @@ impl <D: IonDataSource> BinaryIonReader<D> {
       }
     }
     self.step_out()?;
+//    println!("Done reading.");
     Ok(())
   }
 
@@ -55,8 +68,11 @@ impl <D: IonDataSource> BinaryIonReader<D> {
           format!("Found a {:?} value in the $ion_symbol_table symbols list", ion_type)
         );
       }
-      match self.string_value()? {
-        Some(symbol_text) => self.symbols.intern(Some(symbol_text.into())),
+      match self.read_string()? {
+        Some(symbol_text) => {
+          //println!("Interning {:?}", &symbol_text);
+          self.symbols.intern(Some(symbol_text.into()));
+        }
         None => continue
       };
     }
@@ -71,6 +87,9 @@ impl <D: IonDataSource> BinaryIonReader<D> {
   pub fn step_out(&mut self) -> IonResult<()> {
     self.cursor.step_out()
   }
+
+  //TODO:
+  // pub fn read_ion_value(&mut self) -> IonResult<IonValue>
 
   pub fn ion_dom_value(&mut self) -> IonResult<IonDomValue> {
     use self::IonType::*;
@@ -88,21 +107,35 @@ impl <D: IonDataSource> BinaryIonReader<D> {
       return Ok(dom_value);
     }
 
+    // Because we've tested the ion type and checked for null, we can unwrap all of the Option<_> values
     let ion_value = match ion_type {
       Null => unreachable!("Cannot have a null-typed value for which is_null() returns false."),
-      Boolean => IonValue::Boolean(self.boolean_value()?.unwrap()),
-      Integer => IonValue::Integer(self.integer_value()?.unwrap()),
-      Float => IonValue::Float(self.float_value()?.unwrap()),
-      Decimal => IonValue::Decimal(self.decimal_value()?.unwrap()),
-      Timestamp => IonValue::Timestamp(self.timestamp_value()?.unwrap()),
-      Symbol => IonValue::Symbol(IonSymbol::new::<IonSymbolId, IonString>(self.symbol_id_value()?.unwrap(), None)),
-      String => IonValue::String(self.string_value()?.unwrap()),
-      Clob => IonValue::Clob(self.clob_value()?.unwrap()),
-      Blob => IonValue::Blob(self.blob_value()?.unwrap()),
-      Struct => IonValue::Struct(self.struct_value()?.unwrap()),
-      List => IonValue::List(self.list_value()?.unwrap()),
-      SExpression => IonValue::SExpression(self.s_expression_value()?.unwrap()),
-//      _ => unimplemented!("Can't turn a {:?} into an IonValue yet. :(", ion_type)
+      Boolean => IonValue::Boolean(self.read_bool()?.unwrap().into()),
+      Integer => IonValue::Integer(self.unchecked_read_i64()?.unwrap().into()),
+//      Integer => IonValue::Integer(self.read_i64()?.unwrap().into()),
+      Float => IonValue::Float(self.read_f64()?.unwrap().into()),
+      Decimal => IonValue::Decimal(self.read_decimal()?.unwrap().into()),
+//      Timestamp => IonValue::Timestamp(self.read_timestamp()?.unwrap().into()),
+      //TODO: Restore this after fixing Timestamp
+      Timestamp => IonValue::Null(IonNull::from(ion_type)),
+      Symbol => IonValue::Symbol(self.read_symbol()?.unwrap().into()),
+      String => {
+        let mut text = self.ion_system.string_from_pool();
+
+        let text = self
+          .string_ref_map(move |s| {
+            text.push_str(s);
+            text
+          })?
+          .unwrap();
+
+        IonValue::String(IonString::new(text))
+      },
+      Clob => IonValue::Clob(self.read_clob_bytes()?.unwrap().into()),
+      Blob => IonValue::Blob(self.read_blob_bytes()?.unwrap().into()),
+      Struct => IonValue::Struct(self.unchecked_struct_value()?.into()),
+      List => IonValue::List(self.unchecked_list_value()?.into()),
+      SExpression => IonValue::SExpression(self.s_expression_value()?.unwrap().into()),
     };
     Ok(IonDomValue::new(field, annotations, ion_value))
   }
@@ -121,42 +154,48 @@ impl <D: IonDataSource> BinaryIonReader<D> {
   }
 
   // ---- Composite Types --------------------------
-  fn struct_value(&mut self) -> IonResult<Option<IonStruct>> {
+  pub fn struct_value(&mut self) -> IonResult<Option<IonStruct>> {
     if self.ion_type() != IonType::Struct ||  self.is_null() {
       return Ok(None);
     }
-    let mut map = BTreeMap::new(); // No allocations initially
+
+    self.unchecked_struct_value().map(|v| Some(v))
+  }
+
+  fn unchecked_struct_value(&mut self) -> IonResult<IonStruct> {
+    let mut struct_builder = self.ion_system.ion_struct_builder();
     self.step_in()?;
     while let Some(_ion_type) = self.next()? {
-      let field_symbol = self.field()?.expect("Missing field ID inside struct.");
-      let (_field_id, field_name): (IonSymbolId, Option<IonString>) = field_symbol.into();
       let ion_dom_value = self.ion_dom_value()?;
-      map.insert(field_name.unwrap().into(), ion_dom_value);
+      struct_builder.add_child(ion_dom_value);
     }
     self.step_out()?;
 
-    let ion_struct = IonStruct::from(map);
-    Ok(Some(ion_struct))
+    let ion_struct = struct_builder.build();
+    Ok(ion_struct)
   }
 
-  fn list_value(&mut self) -> IonResult<Option<IonList>> {
+  pub fn list_value(&mut self) -> IonResult<Option<IonList>> {
     if self.ion_type() != IonType::List || self.is_null() {
       return Ok(None);
     }
 
-    let mut list = Vec::new();
+    self.unchecked_list_value().map(|v| Some(v))
+  }
+
+  pub fn unchecked_list_value(&mut self) -> IonResult<IonList> {
+    let mut list_builder = self.ion_system.ion_list_builder();
     self.step_in()?;
     while let Some(_ion_type) = self.next()? {
       let ion_dom_value = self.ion_dom_value()?;
-      list.push(ion_dom_value);
+      list_builder.add_child(ion_dom_value);
     }
     self.step_out()?;
 
-    let ion_list = IonList::from(list);
-    Ok(Some(ion_list))
+    Ok(list_builder.build())
   }
 
-  fn s_expression_value(&mut self) -> IonResult<Option<IonSExpression>> {
+  pub fn s_expression_value(&mut self) -> IonResult<Option<IonSExpression>> {
     if self.ion_type() != IonType::SExpression || self.is_null() {
       return Ok(None);
     }
@@ -174,51 +213,66 @@ impl <D: IonDataSource> BinaryIonReader<D> {
   }
 
   // ---- Scalar Types --------------------------
-  pub fn boolean_value(&mut self) -> IonResult<Option<IonBoolean>> {
-    self.cursor.boolean_value()
+  pub fn read_bool(&mut self) -> IonResult<Option<bool>> {
+    self.cursor.read_bool()
   }
 
-  pub fn integer_value(&mut self) -> IonResult<Option<IonInteger>> {
-    self.cursor.integer_value()
+  pub fn read_i64(&mut self) -> IonResult<Option<i64>> {
+    self.cursor.read_i64()
   }
 
-  pub fn float_value(&mut self) -> IonResult<Option<IonFloat>> {
-    self.cursor.float_value()
+  pub fn unchecked_read_i64(&mut self) -> IonResult<Option<i64>> {
+    self.cursor.unchecked_read_i64()
   }
 
-  pub fn decimal_value(&mut self) -> IonResult<Option<IonDecimal>> {
-    self.cursor.decimal_value()
+  pub fn read_f32(&mut self) -> IonResult<Option<f32>> {
+    self.cursor.read_f32()
   }
 
-  pub fn timestamp_value(&mut self) -> IonResult<Option<IonTimestamp>> {
-    self.cursor.timestamp_value()
+  pub fn read_f64(&mut self) -> IonResult<Option<f64>> {
+    self.cursor.read_f64()
   }
 
-  pub fn string_value(&mut self) -> IonResult<Option<IonString>> {
-    self.cursor.string_value()
+  pub fn read_decimal(&mut self) -> IonResult<Option<BigDecimal>> {
+    self.cursor.read_decimal()
   }
 
-  pub fn string_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: Fn(IonStringRef) -> T {
+  pub fn read_timestamp(&mut self) -> IonResult<Option<DateTime<FixedOffset>>> {
+    self.cursor.read_timestamp()
+  }
+
+  pub fn read_string(&mut self) -> IonResult<Option<String>> {
+    self.cursor.read_string()
+  }
+
+  pub fn string_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: FnOnce(&str) -> T {
     self.cursor.string_ref_map(f)
   }
 
-  pub fn symbol_id_value(&mut self) -> IonResult<Option<IonSymbolId>> {
-    self.cursor.symbol_id_value()
+  pub fn read_symbol_id(&mut self) -> IonResult<Option<IonSymbolId>> {
+    self.cursor.read_symbol_id()
   }
 
-  pub fn blob_value(&mut self) -> IonResult<Option<IonBlob>> {
-    self.cursor.blob_value()
+  pub fn read_symbol(&mut self) -> IonResult<Option<IonSymbol>> {
+    let symbol_id = self.read_symbol_id()?.unwrap();
+    let resolved_text = self.symbols.resolve(symbol_id);
+    let symbol = IonSymbol::new(symbol_id, resolved_text);
+    Ok(Some(symbol))
   }
 
-  pub fn blob_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: Fn(IonBlobRef) -> T {
+  pub fn read_blob_bytes(&mut self) -> IonResult<Option<Vec<u8>>> {
+    self.cursor.read_blob_bytes()
+  }
+
+  pub fn blob_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: FnOnce(&[u8]) -> T {
     self.cursor.blob_ref_map(f)
   }
 
-  pub fn clob_value(&mut self) -> IonResult<Option<IonClob>> {
-    self.cursor.clob_value()
+  pub fn read_clob_bytes(&mut self) -> IonResult<Option<Vec<u8>>> {
+    self.cursor.read_clob_bytes()
   }
 
-  pub fn clob_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: Fn(IonClobRef) -> T {
+  pub fn clob_ref_map<F, T>(&mut self, f: F) -> IonResult<Option<T>> where F: FnOnce(&[u8]) -> T {
     self.cursor.clob_ref_map(f)
   }
 
@@ -226,13 +280,12 @@ impl <D: IonDataSource> BinaryIonReader<D> {
     self.cursor.annotation_ids()
   }
 
-  //TODO: This allocates a Vec each time. Optimize?
-  pub fn annotations<'a>(&'a self) -> IonResult<Vec<IonSymbol>> {
+  pub fn annotations(& self) -> IonResult<Vec<IonSymbol>> {
     let annotation_ids = self.annotation_ids();
-    let mut resolved_symbols: Vec<IonSymbol> = Vec::with_capacity(annotation_ids.size_hint().0);
+    let mut resolved_symbols = Vec::new();
     for annotation_id in annotation_ids {
-      let text: IonString = match self.symbols.resolve(annotation_id) {
-        Some(text) => text.into(),
+      let text: Rc<String> = match self.symbols.resolve(annotation_id) {
+        Some(text) => text,
         None => return decoding_error(
           format!("Could not resolve annotation symbol ID {:?}", annotation_id)
         )
@@ -253,22 +306,23 @@ impl <D: IonDataSource> BinaryIonReader<D> {
     let field_id = self.field_id().unwrap();
     match self.symbols.resolve(field_id) {
       Some(text) => Ok(Some(IonSymbol::new(field_id, Some(text)))),
-      None => return decoding_error(
+      None => decoding_error(
         format!("Could not resolve field symbol ID {:?}", field_id)
       )
     }
   }
 
-  fn read_text(&mut self) -> IonResult<IonString> {
+  //TODO: This should return an Option like everything else
+  pub fn read_text(&mut self) -> IonResult<String> {
     let ion_type = self.cursor.ion_type();
     match ion_type {
-      IonType::String => Ok(self.cursor.string_value()?.unwrap()),
+      IonType::String => Ok(self.cursor.read_string()?.unwrap()),
       IonType::Symbol => {
-        let symbol_id = self.cursor.symbol_id_value()?.unwrap();
+        let symbol_id = self.cursor.read_symbol_id()?.unwrap();
         //println!("Resolving: {:?} in {:?}, {} symbols", symbol_id, self.symbols, self.symbols.symbols.len());
         match self.symbols.resolve(symbol_id) {
-          Some(text) => Ok(text.into()),
-          None => return decoding_error(
+          Some(text) => Ok(text.as_ref().to_string()), // This clones the SymbolTable entry
+          None => decoding_error(
             format!("Could not resolve symbol ID {:?}", symbol_id)
           )
         }

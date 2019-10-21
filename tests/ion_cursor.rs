@@ -4,10 +4,10 @@ extern crate num_bigint;
 
 use std::io;
 use amzn_ion::binary::ion_cursor::BinaryIonCursor;
-use amzn_ion::types::ion_type::IonType;
+use amzn_ion::types::IonType;
 use bigdecimal::BigDecimal;
 use num_bigint::BigInt;
-use amzn_ion::types::ion_decimal::IonDecimal;
+use amzn_ion::types::IonDecimal;
 
 fn ivm() -> Vec<u8> {
   let mut ivm = Vec::new();
@@ -33,10 +33,10 @@ fn advance_to(cursor: &mut BinaryIonCursor<io::Cursor<Vec<u8>>>, expected_ion_ty
 
 fn decimal_reading_test(bytes: &[u8], expected: IonDecimal) {
   let mut io_cursor = io_cursor_for(bytes);
-  let mut cursor = BinaryIonCursor::new(&mut io_cursor).unwrap();
+  let mut cursor = BinaryIonCursor::new(io_cursor).unwrap();
   advance_to(&mut cursor, IonType::Decimal);
   let ion_decimal = cursor
-    .decimal_value()
+    .read_decimal()
     .unwrap()
     .unwrap();
 

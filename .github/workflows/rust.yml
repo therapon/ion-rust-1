@@ -14,5 +14,5 @@ jobs:
 
     steps:
       - name: Find libclang.dll
-        if: runner.os == 'Windows'
-        run: dir C:
+        run: |
+          Get-Childitem –Path C:\ -Include *clang.dll* -File -Recurse -ErrorAction SilentlyContinue

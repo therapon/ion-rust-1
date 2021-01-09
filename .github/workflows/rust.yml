@@ -15,4 +15,4 @@ jobs:
     steps:
       - name: Find libclang.dll
         run: |
-          Get-Childitem –Path C:\ -Include *clang.dll* -File -Recurse -ErrorAction SilentlyContinue
+          Get-Childitem –Path C:\msys64\ -Include *clang.dll* -File -Recurse -ErrorAction SilentlyContinue

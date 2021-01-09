@@ -15,4 +15,4 @@ jobs:
     steps:
       - name: Find libclang.dll
         if: runner.os == 'Windows'
-        run: dir /s libclang.dll
+        run: dir /s C:\libclang.dll

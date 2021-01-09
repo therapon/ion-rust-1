@@ -11,12 +11,11 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
-      - name: Remove msys64
+      - name: Setup LLVM Paths
         if: runner.os == 'Windows'
-        run: Remove-Item -LiteralPath "C:\msys64\" -Force -Recurse
-      - name: Install Dependencies
-        if: runner.os == 'Windows'
-        run: choco install llvm -y
+        run: | 
+          echo 'C:\msys64\mingw64\bin' >> $GITHUB_PATH
+          echo 'LIBCLANG_PATH=C:\msys64\mingw64\bin' >> $GITHUB_ENV
       - name: Git Checkout
         uses: actions/checkout@v2
         with:
